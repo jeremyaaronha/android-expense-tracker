@@ -4,9 +4,7 @@ As a software engineer, I want to improve my skills in mobile development and mo
 
 The app allows users to add income and expense transactions, view and filter them, calculate the balance, and delete entries. Through this project, I practiced app structure, navigation, state management, and local data storage, while also focusing on building a clean and modern user interface.
 
-https://youtube.link.goes.here
-
-⸻
+https://youtu.be/oRb5PSbr1do
 
 Development Environment
 
