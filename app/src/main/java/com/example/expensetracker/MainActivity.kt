@@ -26,12 +26,14 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import java.time.LocalDate
 
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent { ExpenseApp() }
     }
 }
+
 
 data class Expense(
     val id: String = "",
@@ -40,6 +42,7 @@ data class Expense(
     val date: String = "",
     val type: String = "income" // income or expense
 )
+
 
 @Composable
 fun ExpenseApp() {
@@ -52,6 +55,7 @@ fun ExpenseApp() {
         if (auth.currentUser != null) "dashboard"
         else "login"
 
+
     NavHost(navController, startDestination = startDestination) {
 
         composable("login") {
@@ -63,6 +67,7 @@ fun ExpenseApp() {
                 }
             )
         }
+
 
         composable("dashboard") {
             DashboardScreen(
@@ -230,7 +235,7 @@ fun DashboardScreen(
     }
 }
 
-/* ---------------- LOGIN ---------------- */
+/* -------------- LOGIN -------------- */
 
 @Composable
 fun LoginScreen(
@@ -279,6 +284,7 @@ fun LoginScreen(
             modifier = Modifier.fillMaxWidth(),
             singleLine = true
         )
+
 
         Spacer(modifier = Modifier.height(20.dp))
 
