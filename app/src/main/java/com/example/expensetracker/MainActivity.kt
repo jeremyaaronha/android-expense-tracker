@@ -1,8 +1,5 @@
 package com.example.expensetracker
 
-// main imports for android and compose ui
-import android.content.Context
-import android.content.SharedPreferences
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -10,7 +7,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
@@ -20,87 +17,103 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.compose.*
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FirebaseFirestore
 import java.time.LocalDate
-import org.json.JSONArray
-import org.json.JSONObject
 
-// main activity that starts the app
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { ExpenseApp() } // set main composable
+        setContent { ExpenseApp() }
     }
 }
 
-// data model for each transaction
 data class Expense(
-    val description: String,
-    val amount: Double,
-    val date: String
+    val id: String = "",
+    val description: String = "",
+    val amount: Double = 0.0,
+    val date: String = "",
+    val type: String = "income" // income or expense
 )
 
 @Composable
 fun ExpenseApp() {
 
-    // navigation controller
     val navController = rememberNavController()
+    val auth = FirebaseAuth.getInstance()
+    val db = FirebaseFirestore.getInstance()
 
-    // get shared preferences to save data
-    val context = LocalContext.current
-    val prefs = context.getSharedPreferences("expenses", Context.MODE_PRIVATE)
+    val startDestination =
+        if (auth.currentUser != null) "dashboard"
+        else "login"
 
-    // state list of expenses
-    var expenses by remember {
-        mutableStateOf(loadExpenses(prefs))
-    }
+    NavHost(navController, startDestination = startDestination) {
 
-    // navigation host with two screens
-    NavHost(navController, startDestination = "dashboard") {
-
-        // dashboard screen
-        composable("dashboard") {
-            DashboardScreen(
-                expenses = expenses,
-                onAddClick = { navController.navigate("add") },
-                onDelete = { index ->
-                    expenses = expenses.toMutableList().also { it.removeAt(index) }
-                    saveExpenses(prefs, expenses) // save after delete
+        composable("login") {
+            LoginScreen(
+                onLoginSuccess = {
+                    navController.navigate("dashboard") {
+                        popUpTo("login") { inclusive = true }
+                    }
                 }
             )
         }
 
-        // add transaction screen
-        composable("add") {
-            AddTransactionScreen(
-                onSave = {
-                    expenses = expenses + it
-                    saveExpenses(prefs, expenses) // save after add
-                    navController.popBackStack()
-                },
-                onBack = { navController.popBackStack() }
+        composable("dashboard") {
+            DashboardScreen(
+                db = db,
+                auth = auth,
+                onLogout = {
+                    auth.signOut()
+                    navController.navigate("login") {
+                        popUpTo("dashboard") { inclusive = true }
+                    }
+                }
             )
         }
     }
 }
 
-/* ------------ dashboard screen --------- */
+/* ---------------- DASHBOARD ---------------- */
 
 @Composable
 fun DashboardScreen(
-    expenses: List<Expense>,
-    onAddClick: () -> Unit,
-    onDelete: (Int) -> Unit
+    db: FirebaseFirestore,
+    auth: FirebaseAuth,
+    onLogout: () -> Unit
 ) {
 
-    // filter state
+    val userId = auth.currentUser?.uid ?: return
+    var expenses by remember { mutableStateOf(listOf<Expense>()) }
     var filter by remember { mutableStateOf("All") }
+    var showDialog by remember { mutableStateOf(false) }
+    var editingExpense by remember { mutableStateOf<Expense?>(null) }
 
-    // filter logic by today or month
+    LaunchedEffect(Unit) {
+        db.collection("users")
+            .document(userId)
+            .collection("transactions")
+            .addSnapshotListener { snapshot, _ ->
+                if (snapshot != null) {
+                    expenses = snapshot.documents.map {
+                        Expense(
+                            id = it.id,
+                            description = it.getString("description") ?: "",
+                            amount = it.getDouble("amount") ?: 0.0,
+                            date = it.getString("date") ?: "",
+                            type = it.getString("type") ?: "income"
+                        )
+                    }
+                }
+            }
+    }
+
+    // apply selected filter
     val filteredExpenses = when (filter) {
         "Today" -> expenses.filter { it.date == LocalDate.now().toString() }
         "Month" -> expenses.filter {
@@ -110,7 +123,6 @@ fun DashboardScreen(
         else -> expenses
     }
 
-    // calculate total balance
     val balance = filteredExpenses.sumOf { it.amount }
 
     Column(
@@ -121,15 +133,22 @@ fun DashboardScreen(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
 
-        Spacer(modifier = Modifier.height(40.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End
+        ) {
+            TextButton(onClick = onLogout) {
+                Text("Logout")
+            }
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
 
         Text("Balance", color = Color.Gray)
-
         Spacer(modifier = Modifier.height(8.dp))
 
-        // show balance with color
         Text(
-            "$${balance}",
+            "$$balance",
             fontSize = 36.sp,
             fontWeight = FontWeight.Bold,
             color = if (balance >= 0) Color(0xFF1E8E3E) else Color.Red
@@ -137,14 +156,16 @@ fun DashboardScreen(
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        // filter buttons
         FilterSelector(filter) { filter = it }
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        // go to add screen
+        // open dialog to add transaction
         Button(
-            onClick = onAddClick,
+            onClick = {
+                editingExpense = null
+                showDialog = true
+            },
             modifier = Modifier
                 .fillMaxWidth()
                 .height(55.dp),
@@ -156,148 +177,154 @@ fun DashboardScreen(
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        // show expense list
         LazyColumn {
-            itemsIndexed(filteredExpenses.reversed()) { index, expense ->
-                ModernExpenseCard(expense) {
-                    val realIndex = expenses.indexOf(expense)
-                    onDelete(realIndex)
-                }
+            items(filteredExpenses) { expense ->
+                ModernExpenseCard(
+                    expense = expense,
+                    onDelete = {
+                        db.collection("users")
+                            .document(userId)
+                            .collection("transactions")
+                            .document(expense.id)
+                            .delete()
+                    },
+                    onEdit = {
+                        editingExpense = expense
+                        showDialog = true
+                    }
+                )
                 Spacer(modifier = Modifier.height(15.dp))
             }
+        }
+
+        // show add or edit dialog
+        if (showDialog) {
+            AddEditTransactionDialog(
+                existingExpense = editingExpense,
+                onDismiss = { showDialog = false },
+                onSave = { expense ->
+                    val data = hashMapOf(
+                        "description" to expense.description,
+                        "amount" to expense.amount,
+                        "date" to expense.date,
+                        "type" to expense.type
+                    )
+
+                    if (expense.id.isEmpty()) {
+                        db.collection("users")
+                            .document(userId)
+                            .collection("transactions")
+                            .add(data)
+                    } else {
+                        db.collection("users")
+                            .document(userId)
+                            .collection("transactions")
+                            .document(expense.id)
+                            .update(data as Map<String, Any>)
+                    }
+
+                    showDialog = false
+                }
+            )
         }
     }
 }
 
-/* --------- add screen ----------- */
+/* ---------------- LOGIN ---------------- */
 
 @Composable
-fun AddTransactionScreen(
-    onSave: (Expense) -> Unit,
-    onBack: () -> Unit
+fun LoginScreen(
+    onLoginSuccess: () -> Unit
 ) {
 
-    // input states
-    var description by remember { mutableStateOf("") }
-    var amount by remember { mutableStateOf("") }
-    var type by remember { mutableStateOf("Income") }
+    val auth = FirebaseAuth.getInstance()
+    // email input state
+    var email by remember { mutableStateOf("") }
+    // password input state
+    var password by remember { mutableStateOf("") }
+    var isLogin by remember { mutableStateOf(true) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFFF5F5F7))
             .padding(24.dp),
+        verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
 
-        Spacer(modifier = Modifier.height(30.dp))
+        Text(
+            if (isLogin) "Login" else "Register",
+            fontSize = 26.sp,
+            fontWeight = FontWeight.Bold
+        )
 
-        Text("New Transaction", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        Spacer(modifier = Modifier.height(24.dp))
 
-        Spacer(modifier = Modifier.height(30.dp))
-
-        // select income or expense
-        TransactionTypeSelector(type) { type = it }
-
-        Spacer(modifier = Modifier.height(20.dp))
-
-        // description input
         OutlinedTextField(
-            value = description,
-            onValueChange = { description = it },
-            label = { Text("Description") },
-            shape = RoundedCornerShape(20.dp),
-            modifier = Modifier.fillMaxWidth()
+            value = email,
+            onValueChange = { email = it },
+            label = { Text("Email") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        OutlinedTextField(
+            value = password,
+            onValueChange = { password = it },
+            label = { Text("Password") },
+            visualTransformation = PasswordVisualTransformation(),
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true
         )
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        // amount input
-        OutlinedTextField(
-            value = amount,
-            onValueChange = { amount = it },
-            label = { Text("Amount") },
-            shape = RoundedCornerShape(20.dp),
-            modifier = Modifier.fillMaxWidth()
-        )
+        // show error message if login fails
+        if (errorMessage != null) {
+            Text(errorMessage!!, color = Color.Red)
+            Spacer(modifier = Modifier.height(12.dp))
+        }
 
-        Spacer(modifier = Modifier.height(30.dp))
-
-        // save button
         Button(
             onClick = {
-                val value = amount.toDoubleOrNull() ?: 0.0
 
-                // negative if expense
-                val finalAmount =
-                    if (type == "Income") value
-                    else -value
-
-                val newExpense = Expense(
-                    description,
-                    finalAmount,
-                    LocalDate.now().toString()
-                )
-
-                onSave(newExpense)
+                if (isLogin) {
+                    auth.signInWithEmailAndPassword(email.trim(), password)
+                        .addOnSuccessListener { onLoginSuccess() }
+                        .addOnFailureListener {
+                            errorMessage = it.message
+                        }
+                } else {
+                    auth.createUserWithEmailAndPassword(email.trim(), password)
+                        .addOnSuccessListener { onLoginSuccess() }
+                        .addOnFailureListener {
+                            errorMessage = it.message
+                        }
+                }
             },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(55.dp),
-            shape = RoundedCornerShape(50),
-            colors = ButtonDefaults.buttonColors(containerColor = Color.Black)
+            modifier = Modifier.fillMaxWidth()
         ) {
-            Text("Save", color = Color.White)
+            Text(if (isLogin) "Login" else "Register")
         }
 
-        Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(12.dp))
 
-        // cancel button
-        TextButton(onClick = onBack) { Text("Cancel") }
-    }
-}
-
-/* ----------- reusable components -------------- */
-
-// selector for income or expense
-@Composable
-fun TransactionTypeSelector(
-    selected: String,
-    onSelected: (String) -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(Color(0xFFE0E0E0), RoundedCornerShape(50))
-            .padding(4.dp)
-    ) {
-
-        listOf("Income", "Expense").forEach { option ->
-
-            val isSelected = selected == option
-
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(50))
-                    .background(
-                        if (isSelected) Color.Black else Color.Transparent
-                    )
-                    .clickable { onSelected(option) }
-                    .padding(vertical = 10.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    option,
-                    color = if (isSelected) Color.White else Color.Black,
-                    fontWeight = FontWeight.SemiBold
-                )
-            }
+        TextButton(onClick = { isLogin = !isLogin }) {
+            Text(
+                if (isLogin)
+                    "Don't have an account? Register"
+                else
+                    "Already have an account? Login"
+            )
         }
     }
 }
 
-// filter selector buttons
+/* ---------------- COMPONENTS ---------------- */
+
 @Composable
 fun FilterSelector(
     selected: String,
@@ -319,11 +346,11 @@ fun FilterSelector(
     }
 }
 
-// card for each transaction
 @Composable
 fun ModernExpenseCard(
     expense: Expense,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onEdit: () -> Unit
 ) {
 
     Card(
@@ -334,19 +361,23 @@ fun ModernExpenseCard(
     ) {
 
         Row(
-            modifier = Modifier.padding(20.dp),
+            modifier = Modifier
+                .padding(20.dp)
+                .fillMaxWidth()
+                .clickable { onEdit() },
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
 
+            // left side info
             Column {
                 Text(expense.description, fontWeight = FontWeight.SemiBold)
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(expense.date, fontSize = 12.sp, color = Color.Gray)
             }
 
+            // right side amount and delete
             Column(horizontalAlignment = Alignment.End) {
 
-                // show amount with color
                 Text(
                     if (expense.amount >= 0)
                         "+${expense.amount}"
@@ -361,7 +392,6 @@ fun ModernExpenseCard(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // delete button
                 IconButton(onClick = onDelete) {
                     Icon(Icons.Default.Delete, contentDescription = null)
                 }
@@ -370,35 +400,80 @@ fun ModernExpenseCard(
     }
 }
 
-/* ---------- storage logic ------------ */
+@Composable
+fun AddEditTransactionDialog(
+    existingExpense: Expense?,
+    onDismiss: () -> Unit,
+    onSave: (Expense) -> Unit
+) {
 
-// save list to shared preferences
-fun saveExpenses(prefs: SharedPreferences, expenses: List<Expense>) {
-    val jsonArray = JSONArray()
-    expenses.forEach {
-        val obj = JSONObject()
-        obj.put("description", it.description)
-        obj.put("amount", it.amount)
-        obj.put("date", it.date)
-        jsonArray.put(obj)
-    }
-    prefs.edit().putString("expenses", jsonArray.toString()).apply()
-}
+    // local state for dialog
+    var description by remember { mutableStateOf(existingExpense?.description ?: "") }
+    var amountText by remember { mutableStateOf(existingExpense?.amount?.toString() ?: "") }
+    var type by remember { mutableStateOf(existingExpense?.type ?: "income") }
 
-// load list from shared preferences
-fun loadExpenses(prefs: SharedPreferences): List<Expense> {
-    val jsonString = prefs.getString("expenses", null) ?: return emptyList()
-    val jsonArray = JSONArray(jsonString)
-    val list = mutableListOf<Expense>()
-    for (i in 0 until jsonArray.length()) {
-        val obj = jsonArray.getJSONObject(i)
-        list.add(
-            Expense(
-                obj.getString("description"),
-                obj.getDouble("amount"),
-                obj.getString("date")
-            )
-        )
-    }
-    return list
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(onClick = {
+                // convert text to number
+                val amount = amountText.toDoubleOrNull() ?: 0.0
+                val finalAmount = if (type == "expense") -kotlin.math.abs(amount) else kotlin.math.abs(amount)
+
+                onSave(
+                    Expense(
+                        id = existingExpense?.id ?: "",
+                        description = description,
+                        amount = finalAmount,
+                        date = LocalDate.now().toString(),
+                        type = type
+                    )
+                )
+            }) {
+                Text("Save")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        },
+        title = { Text(if (existingExpense == null) "New Transaction" else "Edit Transaction") },
+        text = {
+            Column {
+
+                OutlinedTextField(
+                    value = description,
+                    onValueChange = { description = it },
+                    label = { Text("Description") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                OutlinedTextField(
+                    value = amountText,
+                    onValueChange = { amountText = it },
+                    label = { Text("Amount") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("income", "expense").forEach { option ->
+                        Button(
+                            onClick = { type = option },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor =
+                                if (type == option) Color.Black else Color.Gray
+                            )
+                        ) {
+                            Text(option.capitalize(), color = Color.White)
+                        }
+                    }
+                }
+            }
+        }
+    )
 }
