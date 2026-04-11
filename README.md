@@ -4,7 +4,7 @@ As a software engineer, I created this project to learn more about cloud databas
 
 This software is a Personal Expense Tracker Android app built using Kotlin and Compose. Users can register, log in, and manage their transactions like income and expenses. All data is stored in Firebase Firestore, which is a cloud database. The app listens to real time changes in the database and updates the screen automatically.
 
-https://youtu.be/oRb5PSbr1do
+https://youtu.be/kgGgtcbMPeY
 
 Development Environment
 
